@@ -1,3 +1,8 @@
+"""
+In the following code, I have added cooldown cmd in 2 cmds. So, any of them can only be used 1 time within the specified time.
+This means, if I take my code into consideration, eithor rob or beg cmd can only be used 1 time in 12 hours. So, if you use rob, then you can neither use rob nor beg in 12 hours.
+"""
+
 import discord
 from discord.ext import commands
 import asyncio
@@ -16,6 +21,7 @@ bot = commands.Bot(command_prefix="x!", intents=intents)
 class economy(commands.Cog):
     def __init__(self, bot):
         self.bot = bot
+        self._cd = commands.CooldownMapping.from_cooldown(1, 43200, commands.BucketType.user) #The cooldown system. All the cmds in this class will have the same cooldown if specified in cmds.
     @commands.Cog.listener()
     async def on_ready(self):
       print("Bot is online")
@@ -51,20 +57,30 @@ class economy(commands.Cog):
 
     @commands.command()
     async def rob(self, ctx, member: discord.Member):
-      await open_account(ctx.author)
-      await open_account (member)
-      bal = await update_bank(member)
-      if bal[0]<100:
-        await ctx.send("Its not worth it!")
-        return
-      earnings=random.randrange(0, bal[0]) #The maximum you can rob is the account's balance of the person whom you are robbing.
-      await update_bank(ctx.author,earnings, "Credits")
-      await update_bank(member, -1*earnings, "Credits")
-      em = discord.Embed(title=(f'Robbed from {member}'), description=(f'You robbed <a:Coin:1088127439990947910> {earnings} from {member}!'), color = discord.Color.random())
-      await ctx.send(embed=em)
+      bucket = self._cd.get_bucket(ctx.message) #Cooldown cmd
+      retry_after = bucket.update_rate_limit()
+      if retry_after:
+        await ctx.send(f"The command is on cooldown. Please try again in {round(retry_after, 1)} seconds!", delete_after = 10)
+      else:
+          await open_account(ctx.author)
+          await open_account (member)
+          bal = await update_bank(member)
+          if bal[0]<100:
+            await ctx.send("Its not worth it!")
+            return
+          earnings=random.randrange(0, bal[0]) #The maximum you can rob is the account's balance of the person whom you are robbing.
+          await update_bank(ctx.author,earnings, "Credits")
+          await update_bank(member, -1*earnings, "Credits")
+          em = discord.Embed(title=(f'Robbed from {member}'), description=(f'You robbed <a:Coin:1088127439990947910> {earnings} from {member}!'), color = discord.Color.random())
+          await ctx.send(embed=em)
       
     @commands.command()
     async def beg(self, ctx):
+        bucket = self._cd.get_bucket(ctx.message) #Cooldown cmd
+      retry_after = bucket.update_rate_limit()
+      if retry_after:
+        await ctx.send(f"The command is on cooldown. Please try again in {round(retry_after, 1)} seconds!", delete_after = 10)
+      else:
         await open_account(ctx.author)
         user = ctx.author
         users = await get_bank_data()
@@ -142,7 +158,25 @@ class economy(commands.Cog):
         amount = item["amount"]
         em.add_field(name = name, value = amount)
       await ctx.send(embed = em)
-
+    
+    @commands.command()
+    async def sell(self, ctx, item, amount = 1):
+        await open_account(ctx.author)   
+        res = await sell_this(ctx.author,item,amount) 
+        if not res[0]:
+            if res[1]==1:
+                await ctx.send("That Object isn't there!")
+                return
+            if res[1]==2:
+                await ctx.send(f"You don't have {amount} {item} in your bag.")
+                return
+            if res[1]==3:
+                await ctx.send(f"You don't have {item} in your bag.")
+                return
+        em = discord.Embed(title = "Item sold!", description = f"{ctx.author.mention} just sold {amount} {item} and got half the real price of the item.", color = discord.Color.random())
+        await ctx.send(embed = em)
+    
+    
 mainshop = [
 {"name":"Pikachu","price":1000,"description":"An electric type Pokémon."},
 {"name":"Bulbasaur","price":500,"description":"A grass type Pokemon."},
@@ -151,6 +185,46 @@ mainshop = [
            ]
 #The above are the shop items followed by item name, price and description. 
 
+async def sell_this(user,item_name,amount,price = None):
+      item_name = item_name.lower()
+      name_ = None
+      for item in mainshop:
+        name = item["name"].lower()
+        if name == item_name:
+            name_ = name
+            if price==None:
+                price = 0.5* item["price"] #This means, the amount credited on acc will be half the orginal price set for the item. You can change it as you want. :)
+                break
+      if name_ == None:
+          return [False,1]
+        
+      cost = price*amount  
+      users = await get_bank_data()  
+      balance = await update_bank(user)
+
+      try:
+        index = 0
+        t = None
+        for thing in users[str(user.id)]["bag"]:
+            n = thing["item"]
+            if n == item_name:
+                old_amt = thing["amount"]
+                new_amt = old_amt - amount
+                if new_amt < 0:
+                    return [False,2]
+                users[str(user.id)]["bag"][index]["amount"] = new_amt
+                t = 1
+                break
+            index+=1 
+        if t == None:
+            return [False,3]
+      except:
+        return [False,3]    
+      with open("file.json","w") as f:
+        dump(users,f)
+      await update_bank(user,cost,"Credits")
+      return [True,"Worked"]
+    
 async def buy_this(user,item_name,amount):
     item_name = item_name.lower()
     name_ = None
